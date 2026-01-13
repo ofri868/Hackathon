@@ -1,1 +1,5 @@
 blackjack-env/
+.idea/
+__pycache__/
+*.pyc
+mock_server.py
