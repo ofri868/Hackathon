@@ -141,7 +141,7 @@ class Client:
 
     def play_game(self, rounds):
         """
-        Handles the gameplay loop for the specified number of rounds.
+        Handles the gameplay loop with 'Smart Drain' logic and Timeouts.
         """
         print(f"--- Starting Game ({rounds} rounds) ---")
 
@@ -149,71 +149,108 @@ class Client:
         RESULT_TIE = 0x1
         RESULT_LOSS = 0x2
         RESULT_WIN = 0x3
+
         rounds_played = 0
         wins = 0
+
+        # Set a 15-second timeout for all game operations
+        # If the server disappears, we won't hang forever.
+        self.tcp_socket.settimeout(15.0)
+
         try:
             while rounds_played < rounds:
                 print(f"\n--- Round {rounds_played + 1} ---")
 
-                while True:
-                    # 1. Wait for Server Payload (9 Bytes) : Cookie(4) + Type(1) + Result(1) + Card(3)
-                    data = self.tcp_socket.recv(9)
-                    if len(data) < 9:
-                        print("Server disconnected or sent incomplete data.")
+                round_over = False
+                while not round_over:
+                    packets = []
+
+                    try:
+                        # 1. READ PHASE
+                        # We try to read the first packet (blocking up to 15s)
+                        first_data = self.tcp_socket.recv(9)
+                        if not first_data: raise Exception("Server disconnected")
+                        packets.append(first_data)
+
+                        # Quick check for burst packets (like the initial 2 cards)
+                        # We temporarily lower timeout to grab any data already in the pipe
+                        self.tcp_socket.settimeout(0.2)
+                        while True:
+                            try:
+                                more_data = self.tcp_socket.recv(9)
+                                if not more_data: break
+                                packets.append(more_data)
+                            except socket.timeout:
+                                break
+                                # Restore main timeout
+                        self.tcp_socket.settimeout(15.0)
+
+                    except socket.timeout:
+                        print("Error: Server timed out (took too long to respond).")
+                        return
+                    except socket.error as e:
+                        print(f"Connection error: {e}")
                         return
 
-                    cookie, msg_type, result, card_val = struct.unpack('!IBB3s', data)
+                    # 2. PROCESS PHASE
+                    server_requesting_move = False
 
-                    if cookie != MAGIC_COOKIE or msg_type != MSG_TYPE_PAYLOAD:
-                        print(f"Invalid packet received: {data}")
-                        continue
+                    for data in packets:
+                        if len(data) < 9: continue
 
-                    if result == RESULT_ACTIVE:
-                        card_name = decode_card(card_val)
-                        print(f"Server dealt: {card_name}")
+                        cookie, msg_type, result, card_val = struct.unpack('!IBB3s', data)
 
-                    if result != RESULT_ACTIVE:
-                        if result == RESULT_WIN:
-                            print("Result: YOU WIN!")
-                            wins += 1
-                        elif result == RESULT_LOSS:
-                            print("Result: YOU LOSE!")
-                        elif result == RESULT_TIE:
-                            print("Result: IT'S A TIE!")
+                        # Decoded card (if valid)
+                        # We check if rank is NOT 0 before printing
+                        # struct.unpack('!HB', card_val) -> Rank is first 2 bytes
+                        rank = struct.unpack('!H', card_val[:2])[0]
 
-                        rounds_played += 1
-                        break
+                        card_msg = ""
+                        if rank > 0:
+                            card_msg = f"Server dealt: {decode_card(card_val)}"
+                            print(card_msg)
 
-                    print("Your hand is still active.")
-                    while True:
-                        move = input("Action (h = Hit, s = Stand): ").lower()
-                        if move in ['h', 's']:
+                        if result != RESULT_ACTIVE:
+                            if result == RESULT_WIN:
+                                print(f"Result: YOU WIN!")
+                                wins += 1
+                            elif result == RESULT_LOSS:
+                                print(f"Result: YOU LOSE!")
+                            elif result == RESULT_TIE:
+                                print(f"Result: IT'S A TIE!")
+
+                            round_over = True
+                            rounds_played += 1
                             break
-                        print("Invalid input.")
+                        else:
+                            server_requesting_move = True
 
-                    # 4. Send Decision to Server (10 Bytes), Format: Cookie(4) + Type(1) + Decision(5)
-                    decision_str = "Hittt" if move == 'h' else "Stand"
+                    # 3. ACTION PHASE
+                    if server_requesting_move and not round_over:
+                        print("Your hand is active.")
+                        while True:
+                            move = input("Action (h = Hit, s = Stand): ").lower()
+                            if move in ['h', 's']:
+                                break
+                            print("Invalid input.")
 
-                    packet = struct.pack('!IB5s',
-                                         MAGIC_COOKIE,
-                                         MSG_TYPE_PAYLOAD,
-                                         decision_str.encode('utf-8'))
+                        decision_str = "Hittt" if move == 'h' else "Stand"
+                        packet = struct.pack('!IB5s', MAGIC_COOKIE, MSG_TYPE_PAYLOAD, decision_str.encode('utf-8'))
+                        self.tcp_socket.sendall(packet)
+                        print(f"Sent decision: {decision_str}")
 
-                    self.tcp_socket.sendall(packet)
-                    print(f"Sent decision: {decision_str}")
-
+            # End of all rounds
             if rounds_played > 0:
                 win_rate = (wins / rounds_played) * 100
             else:
                 win_rate = 0.0
-
             print(f"\nFinished playing {rounds_played} rounds, win rate: {win_rate:.1f}%")
 
         except Exception as e:
             print(f"Game error: {e}")
         finally:
             print("Closing connection...")
-            if self.tcp_socket:
+            if hasattr(self, 'tcp_socket'):
                 self.tcp_socket.close()
 
     def start(self):
