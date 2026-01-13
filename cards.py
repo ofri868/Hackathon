@@ -49,3 +49,18 @@ def decode_card(card_bytes):
 
     except Exception as e:
         return f"Corrupted Card ({card_bytes.hex()})"
+
+
+def calculate_hand_total(ranks_list):
+    """
+    Calculates the total. Ace (1) is always 1. Face cards are 10.
+    """
+    total = 0
+    for rank in ranks_list:
+        if rank >= 10:  # Jack, Queen, King
+            total += 10
+        else:
+            # Ace(1) .. 9 are just their face value
+            total += rank
+
+    return total

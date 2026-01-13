@@ -1,7 +1,7 @@
 import socket
 import struct
 import time
-from cards import decode_card
+from cards import decode_card, calculate_hand_total
 
 UDP_PORT = 13122 # listening port for UDP offers (Hardcoded per instructions)
 BUFFER_SIZE = 1024
@@ -10,6 +10,14 @@ MSG_TYPE_OFFER = 0x2     # Byte value indicating the packet is a Server Offer.
 MSG_TYPE_REQUEST = 0x3   # Byte value indicating the packet is a Client Request.
 MSG_TYPE_PAYLOAD = 0x4   # Byte value indicating the packet is a Game Payload (move/result).
 
+CMD_HIT = "Hittt"
+CMD_STAND = "Stand"
+
+RESULT_ACTIVE = 0x0
+RESULT_TIE = 0x1
+RESULT_LOSS = 0x2
+RESULT_WIN = 0x3
+
 class Client:
     def __init__(self):
         self.server_ip = None
@@ -17,14 +25,25 @@ class Client:
         self.player_name = "Team Avdija"
 
     def listen_for_offers(self):
+        """
+        Listens for UDP broadcast offers from the server.
+        Blocking call until a valid offer is received.
+        """
         print(f"Client started, listening for offer requests...")
 
-        # 1. Create UDP socket, use IPv4 and datagram protocol for UDP
+        # Create UDP socket, use IPv4 and datagram protocol for UDP
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         # SO_REUSEADDR = This allows us to restart the program and re-bind to port 13122 immediately
         # without waiting for the OS to release the port (prevents "Address already in use" errors).
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Good for restarts
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Good for Windows restarts
+
+        # Enable port reuse (REQUIRED for Linux/Mac to run multiple clients)
+        # We wrap in try-except because Windows does not support this flag.
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except AttributeError:
+            pass
 
         sock.bind(("", UDP_PORT))
 
@@ -141,39 +160,29 @@ class Client:
 
     def play_game(self, rounds):
         """
-        Handles the gameplay loop with 'Smart Drain' logic and Timeouts.
+        Handles the gameplay loop with Sum Tracking.
         """
         print(f"--- Starting Game ({rounds} rounds) ---")
-
-        RESULT_ACTIVE = 0x0
-        RESULT_TIE = 0x1
-        RESULT_LOSS = 0x2
-        RESULT_WIN = 0x3
-
         rounds_played = 0
         wins = 0
-
-        # Set a 15-second timeout for all game operations
-        # If the server disappears, we won't hang forever.
         self.tcp_socket.settimeout(15.0)
 
         try:
             while rounds_played < rounds:
                 print(f"\n--- Round {rounds_played + 1} ---")
 
+                # Reset hand for new round
+                current_hand_ranks = []
                 round_over = False
+
                 while not round_over:
                     packets = []
-
                     try:
                         # 1. READ PHASE
-                        # We try to read the first packet (blocking up to 15s)
                         first_data = self.tcp_socket.recv(9)
                         if not first_data: raise Exception("Server disconnected")
                         packets.append(first_data)
 
-                        # Quick check for burst packets (like the initial 2 cards)
-                        # We temporarily lower timeout to grab any data already in the pipe
                         self.tcp_socket.settimeout(0.2)
                         while True:
                             try:
@@ -182,14 +191,12 @@ class Client:
                                 packets.append(more_data)
                             except socket.timeout:
                                 break
-                                # Restore main timeout
+                            except socket.error:
+                                break
                         self.tcp_socket.settimeout(15.0)
 
-                    except socket.timeout:
-                        print("Error: Server timed out (took too long to respond).")
-                        return
-                    except socket.error as e:
-                        print(f"Connection error: {e}")
+                    except Exception as e:
+                        print(f"Error: {e}")
                         return
 
                     # 2. PROCESS PHASE
@@ -199,16 +206,13 @@ class Client:
                         if len(data) < 9: continue
 
                         cookie, msg_type, result, card_val = struct.unpack('!IBB3s', data)
-
-                        # Decoded card (if valid)
-                        # We check if rank is NOT 0 before printing
-                        # struct.unpack('!HB', card_val) -> Rank is first 2 bytes
                         rank = struct.unpack('!H', card_val[:2])[0]
 
-                        card_msg = ""
+                        # If we got a real card, add to sum
                         if rank > 0:
-                            card_msg = f"Server dealt: {decode_card(card_val)}"
-                            print(card_msg)
+                            current_hand_ranks.append(rank)
+                            current_sum = calculate_hand_total(current_hand_ranks)
+                            print(f"Server dealt: {decode_card(card_val)} (Sum: {current_sum})")
 
                         if result != RESULT_ACTIVE:
                             if result == RESULT_WIN:
@@ -240,18 +244,13 @@ class Client:
                         print(f"Sent decision: {decision_str}")
 
             # End of all rounds
-            if rounds_played > 0:
-                win_rate = (wins / rounds_played) * 100
-            else:
-                win_rate = 0.0
+            win_rate = (wins / rounds_played * 100) if rounds_played > 0 else 0.0
             print(f"\nFinished playing {rounds_played} rounds, win rate: {win_rate:.1f}%")
 
         except Exception as e:
             print(f"Game error: {e}")
         finally:
-            print("Closing connection...")
-            if hasattr(self, 'tcp_socket'):
-                self.tcp_socket.close()
+            if hasattr(self, 'tcp_socket'): self.tcp_socket.close()
 
     def start(self):
         """
