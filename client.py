@@ -1,6 +1,7 @@
 import socket
 import struct
 import time
+from cards import decode_card
 
 UDP_PORT = 13122 # listening port for UDP offers (Hardcoded per instructions)
 BUFFER_SIZE = 1024
@@ -167,8 +168,9 @@ class Client:
                         print(f"Invalid packet received: {data}")
                         continue
 
-                    # TODO: Parse the 'card_val' (3 bytes) to display a nice card name (e.g. "Ace of Spades")
-                    print(f"Server sent card data: {card_val} | Game Status: {result}")
+                    if result == RESULT_ACTIVE:
+                        card_name = decode_card(card_val)
+                        print(f"Server dealt: {card_name}")
 
                     if result != RESULT_ACTIVE:
                         if result == RESULT_WIN:
@@ -200,7 +202,12 @@ class Client:
                     self.tcp_socket.sendall(packet)
                     print(f"Sent decision: {decision_str}")
 
-            print(f"\nFinished playing {rounds} rounds. Wins: {wins}")
+            if rounds_played > 0:
+                win_rate = (wins / rounds_played) * 100
+            else:
+                win_rate = 0.0
+
+            print(f"\nFinished playing {rounds_played} rounds, win rate: {win_rate:.1f}%")
 
         except Exception as e:
             print(f"Game error: {e}")
