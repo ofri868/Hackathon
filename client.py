@@ -2,27 +2,17 @@ import socket
 import struct
 import time
 from cards import decode_card, calculate_hand_total
+from utils import MAGIC_COOKIE, MSG_TYPE_OFFER, MSG_TYPE_REQUEST, MSG_TYPE_PAYLOAD
+from utils import CMD_HIT, CMD_STAND
+from utils import RESULT_ACTIVE, RESULT_TIE, RESULT_LOSS, RESULT_WIN
+from utils import UDP_PORT, BUFFER_SIZE
 
-UDP_PORT = 13122 # listening port for UDP offers (Hardcoded per instructions)
-BUFFER_SIZE = 1024
-MAGIC_COOKIE = 0xabcddcba
-MSG_TYPE_OFFER = 0x2     # Byte value indicating the packet is a Server Offer.
-MSG_TYPE_REQUEST = 0x3   # Byte value indicating the packet is a Client Request.
-MSG_TYPE_PAYLOAD = 0x4   # Byte value indicating the packet is a Game Payload (move/result).
-
-CMD_HIT = "Hittt"
-CMD_STAND = "Stand"
-
-RESULT_ACTIVE = 0x0
-RESULT_TIE = 0x1
-RESULT_LOSS = 0x2
-RESULT_WIN = 0x3
 
 class Client:
     def __init__(self):
         self.server_ip = None
         self.server_port = None
-        self.player_name = "Team Avdija"
+        self.player_name = "Terry Rozier"
 
     def listen_for_offers(self):
         """
@@ -172,6 +162,7 @@ class Client:
                 print(f"\n--- Round {rounds_played + 1} ---")
 
                 # Reset hand for new round
+                current_dealer_ranks = []
                 current_hand_ranks = []
                 round_over = False
 
@@ -207,6 +198,10 @@ class Client:
 
                         cookie, msg_type, result, card_val = struct.unpack('!IBB3s', data)
                         rank = struct.unpack('!H', card_val[:2])[0]
+
+                        if cookie != MAGIC_COOKIE or msg_type != MSG_TYPE_PAYLOAD:
+                            print("Received invalid packet from server, ignoring...")
+                            continue
 
                         # If we got a real card, add to sum
                         if rank > 0:

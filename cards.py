@@ -48,6 +48,7 @@ def decode_card(card_bytes):
         return f"{color}{rank_str} of {suit_str}{RESET}"
 
     except Exception as e:
+        print(f"DEBUG ERROR: {e}")
         return f"Corrupted Card ({card_bytes.hex()})"
 
 
@@ -67,8 +68,6 @@ def calculate_hand_total(ranks_list):
 from dataclasses import dataclass
 import random
 
-SUITS = [0, 1, 2, 3]   # H, D, C, S
-RANKS = list(range(1, 14))  # A(1) .. K(13)
 @dataclass
 class Card:
     rank: int   # 1-13

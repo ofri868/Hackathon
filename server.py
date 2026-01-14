@@ -3,34 +3,23 @@ import socket
 import time
 import threading
 from cards import Card, card_value, Deck
+from utils import MAGIC_COOKIE, MSG_TYPE_OFFER, MSG_TYPE_REQUEST, MSG_TYPE_PAYLOAD
+from utils import CMD_HIT, CMD_STAND
+from utils import RESULT_ACTIVE, RESULT_TIE, RESULT_LOSS, RESULT_WIN
+from utils import UDP_PORT
 
 LISTEN_BACKLOG = 5
 TCP_BIND_ADDR = ''  # all interfaces
 
-MAGIC_COOKIE = 0xabcddcba
-MSG_TYPE_OFFER = 0x2
-
-BROADCAST_PORT = 13122
 BROADCAST_INTERVAL = 1.0  # seconds
 BROADCAST_ADDR = '<broadcast>'
 OFFER_STRUCT = "!IBH32s"
 REQUEST_STRUCT = "!IBB32s"
-MSG_TYPE_REQUEST = 0x3
 MAX_ROUNDS = 255
 REQUEST_SIZE = 38
 SERVER_PAYLOAD_STRUCT = "!IBBHB"
 CLIENT_PAYLOAD_STRUCT = "!IB5s"
-MSG_TYPE_PAYLOAD = 0x4
 
-# Decisions
-DECISION_HIT = b"Hittt"
-DECISION_STAND = b"Stand"
-
-# Results
-RESULT_NOT_OVER = 0x0
-RESULT_TIE = 0x1
-RESULT_LOSS = 0x2
-RESULT_WIN = 0x3
 
 def dealer_turn(deck: Deck, dealer_cards: list) -> tuple[list, int, bool]:
     """
@@ -99,7 +88,7 @@ def udp_offer_broadcast_loop(tcp_port: int, server_name: str):
 
     try:
         while True:
-            sock.sendto(offer_packet, (BROADCAST_ADDR, BROADCAST_PORT))
+            sock.sendto(offer_packet, (BROADCAST_ADDR, UDP_PORT))
             time.sleep(BROADCAST_INTERVAL)  # blocks → no busy waiting
 
     except KeyboardInterrupt:
@@ -198,15 +187,15 @@ def game_loop(client_sock: socket.socket):
             client_total = sum(card_value(c) for c in client_cards)
             dealer_total = card_value(dealer_cards[0])  # second card hidden
 
-            # Send client cards
-            for card in client_cards:
-                payload = build_server_payload(RESULT_NOT_OVER, card)
-                client_sock.sendall(payload)
-
             # Send dealer's visible card
             client_sock.sendall(
-                build_server_payload(RESULT_NOT_OVER, dealer_cards[0])
+                build_server_payload(RESULT_ACTIVE, dealer_cards[0])
             )
+            
+            # Send client cards
+            for card in client_cards:
+                payload = build_server_payload(RESULT_ACTIVE, card)
+                client_sock.sendall(payload)
 
             client_bust = False
 
@@ -219,17 +208,20 @@ def game_loop(client_sock: socket.socket):
                 data = recv_exact(client_sock, 10)
                 decision = parse_client_payload(data)
 
-                if decision == "Stand":
+                if decision == CMD_STAND:
                     break
 
-                # Hit
-                card = deck.draw()
-                client_cards.append(card)
-                client_total += card_value(card)
+                elif decision == CMD_HIT:
+                    # Hit
+                    card = deck.draw()
+                    client_cards.append(card)
+                    client_total += card_value(card)
 
-                client_sock.sendall(
-                    build_server_payload(RESULT_NOT_OVER, card)
-                )
+                    client_sock.sendall(
+                        build_server_payload(RESULT_ACTIVE, card)
+                    )
+                else:
+                    raise ValueError("Invalid client decision")
 
             # ---- Dealer turn ----
             dealer_bust = False
@@ -237,7 +229,7 @@ def game_loop(client_sock: socket.socket):
             if not client_bust:
                 # Reveal hidden dealer card
                 client_sock.sendall(
-                    build_server_payload(RESULT_NOT_OVER, dealer_cards[1])
+                    build_server_payload(RESULT_ACTIVE, dealer_cards[1])
                 )
 
                 dealer_cards, dealer_total, dealer_bust = dealer_turn(
@@ -247,7 +239,7 @@ def game_loop(client_sock: socket.socket):
                 # Send any additional dealer cards
                 for card in dealer_cards[2:]:
                     client_sock.sendall(
-                        build_server_payload(RESULT_NOT_OVER, card)
+                        build_server_payload(RESULT_ACTIVE, card)
                     )
 
             # ---- Decide winner ----
@@ -277,21 +269,20 @@ def tcp_accept_loop(tcp_port: int, client_handler):
     Accepts incoming TCP connections forever.
     For each client, starts a new handler thread.
     """
-
+    # Creates and sets up the TCP server socket
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
     server_sock.bind((TCP_BIND_ADDR, tcp_port))
     server_sock.listen(LISTEN_BACKLOG)
 
     print(f"TCP server listening on port {tcp_port}")
 
+    # Accept loop
     try:
         while True:
             client_sock, client_addr = server_sock.accept()
             print(f"New client connected from {client_addr}")
-
+            # Start a new thread to handle the client
             thread = threading.Thread(
                 target=client_handler,
                 args=(client_sock, client_addr),
@@ -330,9 +321,9 @@ def build_server_payload(result: int, card: Card = None) -> bytes:
 def parse_client_payload(data: bytes) -> str:
     if len(data) != 10:
         raise ValueError("Invalid client payload length")
-
     magic, msg_type, decision = struct.unpack(CLIENT_PAYLOAD_STRUCT, data)
-
+    
+    # Validate the data
     if magic != MAGIC_COOKIE:
         raise ValueError("Bad magic cookie")
     if msg_type != MSG_TYPE_PAYLOAD:
@@ -347,7 +338,7 @@ def parse_client_payload(data: bytes) -> str:
 
 if __name__ == "__main__":
     TCP_PORT = 2048
-    SERVER_NAME = "DealerOfri"
+    SERVER_NAME = "Chauncey Billups"
 
     # Start UDP broadcast in background
     udp_thread = threading.Thread(
