@@ -244,7 +244,11 @@ class Client:
                             server_requesting_move = True
 
                     # 3. ACTION PHASE
-                    if server_requesting_move and not round_over:
+                    if server_requesting_move and not round_over and len(leftover_packets) == 0:
+
+
+                        if len(current_hand_ranks) < 2:
+                            continue
                         print("Your hand is active.")
                         while True:
                             move = input("Action (h = Hit, s = Stand): ").lower()
