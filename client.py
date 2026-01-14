@@ -156,44 +156,51 @@ class Client:
         rounds_played = 0
         wins = 0
         self.tcp_socket.settimeout(15.0)
+        leftover_packets = []
 
         try:
             while rounds_played < rounds:
                 print(f"\n--- Round {rounds_played + 1} ---")
 
                 # Reset hand for new round
-                current_dealer_ranks = []
+                cards_received_counter = 0
                 current_hand_ranks = []
+                dealer_hand_ranks = []
                 round_over = False
+                my_turn = True
 
                 while not round_over:
                     packets = []
-                    try:
-                        # 1. READ PHASE
-                        first_data = self.tcp_socket.recv(9)
-                        if not first_data: raise Exception("Server disconnected")
-                        packets.append(first_data)
+                    if len(leftover_packets) > 0:
+                        packets = leftover_packets[:]
+                        leftover_packets = []
+                    else:
+                        try:
+                            # 1. READ PHASE
+                            first_data = self.tcp_socket.recv(9)
+                            if not first_data: raise Exception("Server disconnected")
+                            packets.append(first_data)
 
-                        self.tcp_socket.settimeout(0.2)
-                        while True:
-                            try:
-                                more_data = self.tcp_socket.recv(9)
-                                if not more_data: break
-                                packets.append(more_data)
-                            except socket.timeout:
-                                break
-                            except socket.error:
-                                break
-                        self.tcp_socket.settimeout(15.0)
+                            self.tcp_socket.settimeout(0.2)
+                            while True:
+                                try:
+                                    more_data = self.tcp_socket.recv(9)
+                                    if not more_data: break
+                                    packets.append(more_data)
+                                except socket.timeout:
+                                    break
+                                except socket.error:
+                                    break
+                            self.tcp_socket.settimeout(15.0)
 
-                    except Exception as e:
-                        print(f"Error: {e}")
-                        return
+                        except Exception as e:
+                            print(f"Error: {e}")
+                            return
 
                     # 2. PROCESS PHASE
                     server_requesting_move = False
 
-                    for data in packets:
+                    for i, data in enumerate(packets):
                         if len(data) < 9: continue
 
                         cookie, msg_type, result, card_val = struct.unpack('!IBB3s', data)
@@ -205,9 +212,19 @@ class Client:
 
                         # If we got a real card, add to sum
                         if rank > 0:
-                            current_hand_ranks.append(rank)
-                            current_sum = calculate_hand_total(current_hand_ranks)
-                            print(f"Server dealt: {decode_card(card_val)} (Sum: {current_sum})")
+                            cards_received_counter += 1
+                            if cards_received_counter == 1:
+                                dealer_hand_ranks.append(rank)
+                                d_sum = calculate_hand_total(dealer_hand_ranks)
+                                print(f"Dealer's visible card: {decode_card(card_val)}")
+                            elif my_turn:
+                                current_hand_ranks.append(rank)
+                                current_sum = calculate_hand_total(current_hand_ranks)
+                                print(f"Server dealt: {decode_card(card_val)} (Sum: {current_sum})")
+                            else:
+                                dealer_hand_ranks.append(rank)
+                                d_sum = calculate_hand_total(dealer_hand_ranks)
+                                print(f"Dealer dealt: {decode_card(card_val)} (Sum: {d_sum})")
 
                         if result != RESULT_ACTIVE:
                             if result == RESULT_WIN:
@@ -220,6 +237,8 @@ class Client:
 
                             round_over = True
                             rounds_played += 1
+                            if i + 1 < len(packets):
+                                leftover_packets = packets[i + 1:]
                             break
                         else:
                             server_requesting_move = True
@@ -233,10 +252,13 @@ class Client:
                                 break
                             print("Invalid input.")
 
-                        decision_str = "Hittt" if move == 'h' else "Stand"
-                        packet = struct.pack('!IB5s', MAGIC_COOKIE, MSG_TYPE_PAYLOAD, decision_str.encode('utf-8'))
+                        if move == 's':
+                            my_turn = False
+
+                        decision = CMD_HIT if move == 'h' else CMD_STAND
+                        packet = struct.pack('!IB5s', MAGIC_COOKIE, MSG_TYPE_PAYLOAD, decision.encode('utf-8'))
                         self.tcp_socket.sendall(packet)
-                        print(f"Sent decision: {decision_str}")
+                        print(f"Sent decision: {decision}")
 
             # End of all rounds
             win_rate = (wins / rounds_played * 100) if rounds_played > 0 else 0.0

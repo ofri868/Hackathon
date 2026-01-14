@@ -171,6 +171,11 @@ def game_loop(client_sock: socket.socket):
     data = recv_exact(client_sock, REQUEST_SIZE)
     rounds, team_name = parse_request_packet(data)
 
+    try:
+        client_sock.recv(1)
+    except:
+        pass
+
     print(f"Client '{team_name}' connected, playing {rounds} rounds")
     games_won = 0
 
